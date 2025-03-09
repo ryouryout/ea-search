@@ -187,101 +187,145 @@ function generateAdditionalSearchQuery(companyName, firstInfo) {
 }
 
 /**
- * Claude APIを使用して検索結果から会社情報を抽出
+ * Claude APIを使用して情報を抽出
  * @param {string} companyName - 会社名
- * @param {Array} searchResults - 検索結果の配列
+ * @param {Array} searchResults - 検索結果
  * @returns {Promise<Object>} - 抽出された会社情報
  */
 async function extractInfoWithClaude(companyName, searchResults) {
   console.log(`Claude APIで情報抽出: "${companyName}"`);
   
+  const CLAUDE_API_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!CLAUDE_API_KEY) {
+    console.error('ANTHROPIC_API_KEY環境変数が設定されていません');
+    throw new Error('ANTHROPIC_API_KEY環境変数が設定されていません');
+  }
+  
+  // 検索結果を整形
+  const formattedResults = searchResults.map(result => {
+    return `タイトル: ${result.title}\nリンク: ${result.link}\n説明: ${result.snippet}\n`;
+  }).join('\n');
+  
   const prompt = `
-あなたは日本の企業情報を専門に扱う調査アシスタントです。以下の検索結果から、企業「${companyName}」に関する情報を抽出してください。
+あなたは日本の企業情報を抽出するアシスタントです。以下の検索結果をもとに、「${companyName}」の会社情報を抽出してください：
 
 検索結果:
-${JSON.stringify(searchResults, null, 2)}
+${formattedResults}
 
-以下の情報を抽出し、指定されたJSON形式で回答してください。情報が見つからない場合は空文字列にしてください。
+検索結果から以下の情報を抽出し、JSON形式で出力してください：
+1. 郵便番号 (postalCode): 数字7桁のみで表記（ハイフンなし）
+2. 都道府県 (prefecture)
+3. 市区町村 (city)
+4. それ以降の住所 (address)
+5. 代表者の役職名 (representativeTitle)
+6. 代表者の氏名 (representativeName)
 
-1. 郵便番号: 数字7桁のみを抽出してください（ハイフンなし）。例: "1000001"
-2. 都道府県: 都道府県名のみを抽出してください。例: "東京都"
-3. 市区町村: 市区町村名のみを抽出してください。例: "千代田区"
-4. 残りの住所: 都道府県と市区町村を除いた住所を抽出してください。
-5. 代表者の役職名: 代表取締役社長、代表取締役、CEOなど。
-6. 代表者の氏名: 姓名を抽出してください。
+情報が見つからない場合は空文字（""）としてください。
+回答は次の形式のみで出力してください：
 
-必ずこの形式のJSONで回答してください:
 {
-  "postalCode": "1234567",
-  "prefecture": "東京都",
-  "city": "千代田区",
-  "address": "丸の内1-1-1",
-  "representativeTitle": "代表取締役社長",
-  "representativeName": "山田太郎"
+  "postalCode": "郵便番号（数字のみ）",
+  "prefecture": "都道府県",
+  "city": "市区町村",
+  "address": "それ以降の住所",
+  "representativeTitle": "代表者の役職名",
+  "representativeName": "代表者の氏名"
 }
-
-会社のウェブサイトや信頼性の高いビジネスディレクトリからの情報を優先してください。郵便番号は数字7桁のフォーマットのみを使用し、住所は正確に都道府県・市区町村・残りの住所に分けてください。
 `;
 
-  try {
-    const response = await axios({
-      method: 'post',
-      url: 'https://api.anthropic.com/v1/messages',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': CLAUDE_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      data: {
-        model: "claude-3-7-sonnet-20250219",
-        max_tokens: 1024,
-        messages: [
-          {
-            role: "user",
-            content: prompt
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
+  let lastError = null;
+
+  while (retryCount < MAX_RETRIES) {
+    try {
+      const response = await axios({
+        method: 'post',
+        url: 'https://api.anthropic.com/v1/messages',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        data: {
+          model: "claude-3-7-sonnet-20250219",
+          max_tokens: 1024,
+          messages: [
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+          temperature: 0.1
+        },
+        timeout: 30000 // タイムアウトを30秒に設定
+      });
+
+      // レスポンスからJSON部分を抽出
+      if (!response.data || !response.data.content || !response.data.content[0] || !response.data.content[0].text) {
+        console.error('Claude APIからのレスポンスにデータがありません');
+        throw new Error('Claudeからのレスポンスでデータがありませんでした。');
+      }
+
+      const content = response.data.content[0].text;
+      console.log('Claude APIのレスポンス:', content.substring(0, 100) + '...');
+      
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      
+      if (jsonMatch) {
+        try {
+          const parsedData = JSON.parse(jsonMatch[0]);
+          
+          // ログとして抽出された情報を出力
+          console.log('抽出された情報:', JSON.stringify(parsedData, null, 2));
+          
+          // すべてのフィールドが空の場合はエラーとする代わりに警告を表示
+          const allEmpty = !parsedData.postalCode && 
+                         !parsedData.prefecture && 
+                         !parsedData.city && 
+                         !parsedData.address && 
+                         !parsedData.representativeTitle && 
+                         !parsedData.representativeName;
+                         
+          if (allEmpty) {
+            console.warn('すべてのフィールドが空です。情報が十分に抽出されませんでした。');
           }
-        ],
-        temperature: 0.1
-      }
-    });
-
-    // レスポンスからJSON部分を抽出
-    if (!response.data || !response.data.content || !response.data.content[0] || !response.data.content[0].text) {
-      console.error('Claude APIからのレスポンスにデータがありません');
-      throw new Error('Claudeからのレスポンスでデータがありませんでした。');
-    }
-
-    const content = response.data.content[0].text;
-    console.log('Claude APIのレスポンス:', content.substring(0, 100) + '...');
-    
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
-    if (jsonMatch) {
-      const parsedData = JSON.parse(jsonMatch[0]);
-      
-      // ログとして抽出された情報を出力
-      console.log('抽出された情報:', JSON.stringify(parsedData, null, 2));
-      
-      // すべてのフィールドが空の場合はエラーとする代わりに警告を表示
-      const allEmpty = !parsedData.postalCode && 
-                     !parsedData.prefecture && 
-                     !parsedData.city && 
-                     !parsedData.address && 
-                     !parsedData.representativeTitle && 
-                     !parsedData.representativeName;
-                     
-      if (allEmpty) {
-        console.warn('すべてのフィールドが空です。情報が十分に抽出されませんでした。');
+          
+          return parsedData;
+        } catch (parseError) {
+          console.error('JSON解析エラー:', parseError);
+          throw new Error('抽出された情報をJSONとして解析できませんでした。');
+        }
       }
       
-      return parsedData;
+      throw new Error('Claudeからの応答をJSONとして解析できませんでした。');
+    } catch (error) {
+      lastError = error;
+      retryCount++;
+      
+      // エラー情報をより詳細に記録
+      console.error(`Claude API error (attempt ${retryCount}/${MAX_RETRIES}):`, {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data
+      });
+      
+      if (retryCount >= MAX_RETRIES) {
+        console.error(`Claude API最大リトライ回数(${MAX_RETRIES})に達しました`);
+        break;
+      }
+      
+      // バックオフ時間を計算（指数バックオフ: 1秒、2秒、4秒...）
+      const backoffTime = Math.pow(2, retryCount - 1) * 1000;
+      console.log(`${backoffTime}ms後に再試行します...`);
+      
+      // 待機してから再試行
+      await new Promise(resolve => setTimeout(resolve, backoffTime));
     }
-    
-    throw new Error('Claudeからの応答をJSONとして解析できませんでした。');
-  } catch (error) {
-    console.error('Claude API error:', error.message);
-    throw new Error(`Claude APIでエラーが発生しました: ${error.message}`);
   }
+
+  throw new Error(`Claude APIでエラーが発生しました: ${lastError.message}`);
 }
 
 /**
@@ -293,6 +337,12 @@ ${JSON.stringify(searchResults, null, 2)}
  */
 async function verifyInfoWithClaude(companyName, firstInfo, factCheckResults) {
   console.log(`Claude APIで情報検証: "${companyName}"`);
+  
+  const CLAUDE_API_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!CLAUDE_API_KEY) {
+    console.error('ANTHROPIC_API_KEY環境変数が設定されていません');
+    throw new Error('ANTHROPIC_API_KEY環境変数が設定されていません');
+  }
   
   const prompt = `
 あなたは日本の企業情報を検証する専門家です。「${companyName}」について以下の情報が抽出されました：
@@ -324,53 +374,87 @@ ${JSON.stringify(factCheckResults, null, 2)}
 }
 `;
 
-  try {
-    const response = await axios({
-      method: 'post',
-      url: 'https://api.anthropic.com/v1/messages',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': CLAUDE_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      data: {
-        model: "claude-3-7-sonnet-20250219",
-        max_tokens: 1024,
-        messages: [
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        temperature: 0.1
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
+  let lastError = null;
+
+  while (retryCount < MAX_RETRIES) {
+    try {
+      const response = await axios({
+        method: 'post',
+        url: 'https://api.anthropic.com/v1/messages',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        data: {
+          model: "claude-3-7-sonnet-20250219",
+          max_tokens: 1024,
+          messages: [
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+          temperature: 0.1
+        },
+        timeout: 30000 // タイムアウトを30秒に設定
+      });
+
+      // レスポンスからJSON部分を抽出
+      if (!response.data || !response.data.content || !response.data.content[0] || !response.data.content[0].text) {
+        console.error('Claude APIからのレスポンスにデータがありません');
+        throw new Error('Claudeからのレスポンスでデータがありませんでした。');
       }
-    });
 
-    // レスポンスからJSON部分を抽出
-    if (!response.data || !response.data.content || !response.data.content[0] || !response.data.content[0].text) {
-      console.error('Claude APIの検証応答にデータがありません');
-      throw new Error('Claudeからのレスポンスでデータがありませんでした。');
-    }
-
-    const content = response.data.content[0].text;
-    console.log('Claude API検証のレスポンス:', content.substring(0, 100) + '...');
-    
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    
-    if (jsonMatch) {
-      const parsedData = JSON.parse(jsonMatch[0]);
+      const content = response.data.content[0].text;
+      console.log('Claude API検証のレスポンス:', content.substring(0, 100) + '...');
       
-      // ログとして検証された情報を出力
-      console.log('検証された情報:', JSON.stringify(parsedData, null, 2));
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
       
-      return parsedData;
+      if (jsonMatch) {
+        try {
+          const parsedData = JSON.parse(jsonMatch[0]);
+          
+          // 検証された情報をログとして出力
+          console.log('検証された情報:', JSON.stringify(parsedData, null, 2));
+          
+          return parsedData;
+        } catch (parseError) {
+          console.error('JSON解析エラー:', parseError);
+          throw new Error('検証結果をJSONとして解析できませんでした。');
+        }
+      }
+      
+      throw new Error('Claudeからの応答をJSONとして解析できませんでした。');
+    } catch (error) {
+      lastError = error;
+      retryCount++;
+      
+      // エラー情報をより詳細に記録
+      console.error(`Claude API error (attempt ${retryCount}/${MAX_RETRIES}):`, {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data
+      });
+      
+      if (retryCount >= MAX_RETRIES) {
+        console.error(`Claude API最大リトライ回数(${MAX_RETRIES})に達しました`);
+        break;
+      }
+      
+      // バックオフ時間を計算（指数バックオフ: 1秒、2秒、4秒...）
+      const backoffTime = Math.pow(2, retryCount - 1) * 1000;
+      console.log(`${backoffTime}ms後に再試行します...`);
+      
+      // 待機してから再試行
+      await new Promise(resolve => setTimeout(resolve, backoffTime));
     }
-    
-    throw new Error('Claudeからの応答をJSONとして解析できませんでした。');
-  } catch (error) {
-    console.error('Claude API verification error:', error.message);
-    throw new Error(`Claude APIで情報の検証中にエラーが発生しました: ${error.message}`);
   }
+
+  throw new Error(`Claude APIでエラーが発生しました: ${lastError.message}`);
 }
 
 module.exports = {

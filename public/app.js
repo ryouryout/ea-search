@@ -17,13 +17,28 @@ let processedCount = 0;
 let totalCount = 0;
 let websocket = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 5;
+const MAX_RECONNECT_ATTEMPTS = 10; // 最大再接続回数を増やす
+let reconnectTimer = null;
+let lastMessageTime = Date.now(); // 最後にメッセージを受信した時間
+let pingInterval = null; // 定期的なpingのためのタイマー
+const PING_INTERVAL = 15000; // 15秒ごとにpingを送信
 
 // WebSocketを開始
 function setupWebSocket() {
   // 既存の接続を閉じる
   if (websocket && websocket.readyState !== WebSocket.CLOSED) {
     websocket.close();
+  }
+  
+  // タイマーをクリア
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  
+  if (pingInterval) {
+    clearInterval(pingInterval);
+    pingInterval = null;
   }
   
   // 新しい接続を作成 - Railway対応
@@ -44,6 +59,7 @@ function setupWebSocket() {
       console.log('WebSocket接続が確立されました');
       // 接続成功したらカウンターをリセット
       reconnectAttempts = 0;
+      lastMessageTime = Date.now();
       
       // 接続確認メッセージを送信
       websocket.send(JSON.stringify({ 
@@ -56,13 +72,33 @@ function setupWebSocket() {
       
       // プロセスセクションにメッセージを表示
       updateConnectionStatus('接続済み', 'connected');
+      
+      // 定期的なPingの設定
+      pingInterval = setInterval(() => {
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+          // 最後のメッセージから一定時間経過した場合にのみpingを送信
+          const currentTime = Date.now();
+          if (currentTime - lastMessageTime > PING_INTERVAL) {
+            console.log('Pingを送信します');
+            websocket.send(JSON.stringify({ type: 'ping', timestamp: currentTime }));
+          }
+        }
+      }, PING_INTERVAL);
     };
     
     // メッセージを受信したとき
     websocket.onmessage = (event) => {
       try {
         console.log('WebSocketメッセージを受信:', event.data);
+        lastMessageTime = Date.now(); // 最後のメッセージ受信時間を更新
         const data = JSON.parse(event.data);
+        
+        // pingに対するpong応答
+        if (data.type === 'pong') {
+          console.log('Pongを受信:', data);
+          return;
+        }
+        
         handleWebSocketMessage(data);
       } catch (error) {
         console.error('WebSocketメッセージの解析エラー:', error);
@@ -79,18 +115,28 @@ function setupWebSocket() {
     websocket.onclose = (event) => {
       console.log(`WebSocket接続が閉じられました (コード: ${event.code})`);
       
+      // ping interval をクリア
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
+      
       // 正常なクローズでなければ再接続を試みる
       if (event.code !== 1000 && event.code !== 1001) {
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttempts++;
-          const timeout = Math.min(1000 * reconnectAttempts, 5000);
-          console.log(`${timeout}ms後に再接続を試みます (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+          // 指数バックオフ: 再試行の間隔を徐々に増やす
+          const backoffTime = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 30000);
+          console.log(`${backoffTime}ms後に再接続を試みます (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
           updateConnectionStatus(`再接続中... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`, 'reconnecting');
           
-          setTimeout(setupWebSocket, timeout);
+          reconnectTimer = setTimeout(setupWebSocket, backoffTime);
         } else {
           console.error('WebSocket再接続の試行回数が上限に達しました');
-          updateConnectionStatus('接続失敗', 'failed');
+          updateConnectionStatus('接続失敗 - ページをリロードしてください', 'failed');
+          
+          // 自動リロードのオプションを表示
+          showReconnectOption();
         }
       } else {
         updateConnectionStatus('切断済み', 'disconnected');
@@ -102,6 +148,29 @@ function setupWebSocket() {
   }
   
   return websocket;
+}
+
+// 再接続オプションを表示
+function showReconnectOption() {
+  const reconnectOption = document.createElement('div');
+  reconnectOption.className = 'reconnect-option';
+  reconnectOption.innerHTML = `
+    <p>サーバーへの接続が切断されました。</p>
+    <button id="reload-button">ページをリロード</button>
+    <button id="retry-button">再接続を試みる</button>
+  `;
+  
+  document.body.appendChild(reconnectOption);
+  
+  document.getElementById('reload-button').addEventListener('click', () => {
+    window.location.reload();
+  });
+  
+  document.getElementById('retry-button').addEventListener('click', () => {
+    document.body.removeChild(reconnectOption);
+    reconnectAttempts = 0;
+    setupWebSocket();
+  });
 }
 
 // 接続状態の表示を更新
@@ -122,6 +191,14 @@ function updateConnectionStatus(message, status) {
   // クラスを更新
   statusElement.className = `connection-status ${status}`;
   statusElement.innerHTML = `<i class="fas fa-${getStatusIcon(status)}"></i> サーバー状態: ${message}`;
+  
+  // failed または error の場合は目立たせる
+  if (status === 'failed' || status === 'error') {
+    statusElement.classList.add('highlight-error');
+    setTimeout(() => {
+      statusElement.classList.remove('highlight-error');
+    }, 3000);
+  }
 }
 
 // ステータスアイコンを取得
@@ -137,6 +214,13 @@ function getStatusIcon(status) {
 
 // WebSocketメッセージを処理
 function handleWebSocketMessage(data) {
+  // エラーのためのフォールバック処理
+  if (!data || !data.type) {
+    console.error('無効なWebSocketメッセージ:', data);
+    return;
+  }
+  
+  // データタイプごとに処理
   switch (data.type) {
     case 'connection_established':
       console.log('サーバーから接続確認を受信:', data.message);
@@ -148,11 +232,18 @@ function handleWebSocketMessage(data) {
       totalCount = data.totalCompanies;
       updateProgress();
       processSection.style.display = 'block';
+      
+      // 検索中の表示
+      loadingModal.style.display = 'flex';
+      progressText.textContent = '検索を開始しています...';
       break;
       
     case 'search_progress':
       // 検索進捗の更新
       updateProcessDisplay(data.company, data.step, data.stepNumber);
+      
+      // ローディングモーダルのテキストを更新
+      progressText.textContent = `${data.company} - ${data.step}`;
       break;
       
     case 'search_complete':
@@ -167,17 +258,68 @@ function handleWebSocketMessage(data) {
           `エラー: ${data.error || '不明なエラー'}`,
           'error'
         );
+        // エラーメッセージを表示
+        showErrorNotification(data.company, data.error);
       }
       break;
       
     case 'all_search_complete':
       // すべての検索が完了
       console.log(`検索完了: 成功=${data.successCount}, エラー=${data.errorCount}`);
+      // ローディングモーダルを非表示
+      loadingModal.style.display = 'none';
+      
+      // 検索結果がなければメッセージを表示
+      if (data.successCount === 0 && data.errorCount > 0) {
+        showErrorNotification('検索エラー', '検索結果が得られませんでした。別の会社名で再試行してください。');
+      }
+      break;
+      
+    case 'pong':
+      // サーバーからのpongレスポンス（処理済み）
       break;
       
     default:
       console.log('不明なWebSocketメッセージタイプ:', data.type);
   }
+}
+
+// エラー通知を表示
+function showErrorNotification(title, message) {
+  const notification = document.createElement('div');
+  notification.className = 'error-notification';
+  notification.innerHTML = `
+    <div class="error-title">${title}</div>
+    <div class="error-message">${message}</div>
+    <button class="error-close">閉じる</button>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  // アニメーション効果
+  setTimeout(() => {
+    notification.classList.add('show');
+  }, 10);
+  
+  // 閉じるボタン
+  notification.querySelector('.error-close').addEventListener('click', () => {
+    notification.classList.remove('show');
+    setTimeout(() => {
+      document.body.removeChild(notification);
+    }, 300);
+  });
+  
+  // 自動で閉じる
+  setTimeout(() => {
+    if (document.body.contains(notification)) {
+      notification.classList.remove('show');
+      setTimeout(() => {
+        if (document.body.contains(notification)) {
+          document.body.removeChild(notification);
+        }
+      }, 300);
+    }
+  }, 8000);
 }
 
 // イベントリスナーの登録
@@ -192,7 +334,78 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // 接続テストボタンを追加
   addConnectionTestButton();
+  
+  // 初期ロード時のUIセットアップ
+  setupInitialUI();
 });
+
+// 初期UIのセットアップ
+function setupInitialUI() {
+  // ロード時に検索中メッセージを非表示
+  loadingModal.style.display = 'none';
+  
+  // エラーがある場合に表示するスタイルを追加
+  const style = document.createElement('style');
+  style.textContent = `
+    .error-notification {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #fff;
+      border-left: 4px solid #ff3860;
+      padding: 15px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      z-index: 1000;
+      max-width: 300px;
+      transform: translateX(400px);
+      transition: transform 0.3s ease;
+    }
+    .error-notification.show {
+      transform: translateX(0);
+    }
+    .error-title {
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    .error-message {
+      margin-bottom: 10px;
+      font-size: 0.9em;
+    }
+    .error-close {
+      background: #f5f5f5;
+      border: none;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-size: 0.8em;
+    }
+    .connection-status.highlight-error {
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
+    .reconnect-option {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: white;
+      padding: 20px;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+      text-align: center;
+      z-index: 1000;
+    }
+    .reconnect-option button {
+      margin: 10px;
+      padding: 8px 15px;
+      cursor: pointer;
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 // 接続テストボタンを追加
 function addConnectionTestButton() {
