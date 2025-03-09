@@ -14,6 +14,10 @@ console.log('- GOOGLE_SEARCH_API_KEY:', GOOGLE_API_KEY ? `設定済み (${GOOGLE
 console.log('- GOOGLE_SEARCH_ENGINE_ID:', GOOGLE_SEARCH_ENGINE_ID || '未設定');
 console.log('- ANTHROPIC_API_KEY:', CLAUDE_API_KEY ? `設定済み (${CLAUDE_API_KEY.substring(0, 5)}...)` : '未設定');
 
+// Railway環境であるかの確認（デバッグ用）
+console.log('- 実行環境:', process.env.RAILWAY_ENVIRONMENT ? 'Railway' : 'ローカル');
+console.log('- NODE_ENV:', process.env.NODE_ENV || '未設定');
+
 /**
  * 会社情報を検索する
  * @param {string} companyName - 検索する会社名
@@ -140,6 +144,21 @@ async function googleSearch(query) {
     throw new Error(`"${query}"の検索結果がありませんでした。`);
   } catch (error) {
     console.error('Google Search API error:', error.message);
+    // エラーの詳細情報をログに出力（デバッグ用）
+    if (error.response) {
+      // サーバーからのレスポンスがある場合
+      console.error('API Response Error:', {
+        status: error.response.status,
+        data: error.response.data,
+        headers: error.response.headers
+      });
+    } else if (error.request) {
+      // リクエストは送信されたがレスポンスがない場合
+      console.error('API Request Error:', error.request);
+    } else {
+      // リクエスト設定時にエラーが発生した場合
+      console.error('API Error Config:', error.config);
+    }
     throw new Error(`Google検索でエラーが発生しました: ${error.message}`);
   }
 }
