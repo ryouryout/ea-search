@@ -26,11 +26,11 @@ function setupWebSocket() {
     websocket.close();
   }
   
-  // 新しい接続を作成 - Render対応
+  // 新しい接続を作成 - Railway対応
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  // ローカル環境とRender環境の両方に対応
+  // ローカル環境とRailway環境の両方に対応
   const host = window.location.hostname;
-  // Renderではホスト名にポート番号を含めない
+  // ローカル環境の場合のみポート番号を指定
   const port = host === 'localhost' || host === '127.0.0.1' ? ':3001' : '';
   const wsUrl = `${protocol}//${host}${port}`;
   

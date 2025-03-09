@@ -62,22 +62,23 @@
    http://localhost:3001
    ```
 
-## Renderへのデプロイ
+## Railwayへのデプロイ
 
-このアプリケーションは[Render](https://render.com/)にワンクリックでデプロイできます。
+このアプリケーションは[Railway](https://railway.app/)に簡単にデプロイできます。
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/ryouryout/ea-search)
+手順は以下の通りです：
 
-または、手動でデプロイする場合は以下の手順に従ってください：
-
-1. Renderアカウントを作成し、ログイン
-2. ダッシュボードから「New +」→「Web Service」を選択
+1. Railwayアカウントを作成し、ログイン
+2. ダッシュボードから「New Project」→「Deploy from GitHub repo」を選択
 3. GitHub連携から本リポジトリを選択
 4. 環境変数を設定
    - `GOOGLE_SEARCH_API_KEY`: Google検索APIキー
    - `GOOGLE_SEARCH_ENGINE_ID`: 検索エンジンID
    - `ANTHROPIC_API_KEY`: AnthropicのAPIキー
+   - `PORT`: 3000（Railwayの標準ポート）
 5. デプロイをクリック
+
+デプロイが完了すると、アプリケーションが公開URLで利用可能になります。
 
 ## 使用方法
 
@@ -90,7 +91,7 @@
 
 - 同時に検索できる会社数は最大500社
 - 無料APIプランを使用している場合、検索リクエスト数に制限があります
-- Rendering環境のフリープランではスリープモードがあるため、初回アクセス時に遅延が発生する場合があります
+- Railwayのフリープランでは一定期間使用がないとスリープモードになるため、初回アクセス時に遅延が発生する場合があります
 
 ## ライセンス
 
@@ -98,4 +99,4 @@
 
 ## 作者
 
-@ryouryout 
+@ryouryout
