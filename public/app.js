@@ -26,9 +26,13 @@ function setupWebSocket() {
     websocket.close();
   }
   
-  // 新しい接続を作成 - ポート3001を使用
+  // 新しい接続を作成 - Render対応
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.hostname}:3001`;
+  // ローカル環境とRender環境の両方に対応
+  const host = window.location.hostname;
+  // Renderではホスト名にポート番号を含めない
+  const port = host === 'localhost' || host === '127.0.0.1' ? ':3001' : '';
+  const wsUrl = `${protocol}//${host}${port}`;
   
   console.log(`Connecting to WebSocket at: ${wsUrl}`);
   
@@ -251,27 +255,19 @@ async function handleSearch() {
     return;
   }
   
+  // 入力上限チェック
   if (companyNames.length > 500) {
-    showAlert('最大500社までしか一度に検索できません。');
+    showAlert('一度に検索できる会社数は500社までです。');
     return;
   }
   
   // 検索開始
-  processedCount = 0;
-  totalCount = companyNames.length;
-  searchResults = [];
-  
-  // UI更新
+  showLoadingModal('検索を開始しています...');
   clearResults();
-  updateProgress();
-  showLoadingModal();
-  
-  // 検索プロセスの表示を初期化
-  processContainer.innerHTML = '';
   processSection.style.display = 'block';
+  processContainer.innerHTML = '';
   
   try {
-    // APIリクエスト
     const response = await fetch('/api/search', {
       method: 'POST',
       headers: {
@@ -281,71 +277,45 @@ async function handleSearch() {
     });
     
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || '検索中にエラーが発生しました。');
+      throw new Error(`サーバーエラー: ${response.status}`);
     }
     
     const data = await response.json();
     
-    // 検索結果データを検証
-    if (!data || !data.results || !Array.isArray(data.results)) {
-      throw new Error('サーバーから正しい形式のデータが返されませんでした。');
+    if (data.error) {
+      throw new Error(data.error);
     }
     
-    // エラーチェック
-    const hasErrors = data.results.some(result => result.errorOccurred);
-    if (hasErrors) {
-      const errorMessages = data.results
-        .filter(result => result.errorOccurred)
-        .map(result => `${result.companyName}: ${result.error}`)
-        .join('\n');
-      
-      showAlert(`一部の会社で検索エラーが発生しました:\n${errorMessages}`);
-    }
+    hideLoadingModal();
     
-    // エラーがないデータのみをフィルタリング
-    searchResults = data.results.filter(result => !result.errorOccurred);
-    
-    // 有効な結果がない場合
-    if (searchResults.length === 0) {
-      showAlert('検索結果がありませんでした。検索語を変更するか、後でもう一度お試しください。');
-      hideLoadingModal();
-      return;
-    }
-    
-    // 結果の表示
+    // 結果を表示
+    searchResults = data.results;
     displayResults(searchResults);
     
   } catch (error) {
-    showAlert(`エラー: ${error.message}`);
-    console.error('Search error:', error);
-  } finally {
     hideLoadingModal();
+    console.error('検索エラー:', error);
+    showAlert(`検索中にエラーが発生しました: ${error.message}`);
   }
 }
 
-/**
- * クリアボタンクリック時の処理
- */
+// クリアボタンクリック時の処理
 function handleClear() {
   companyInput.value = '';
   clearResults();
   processSection.style.display = 'none';
-  resultsSection.style.display = 'none';
 }
 
-/**
- * CSVエクスポートボタンクリック時の処理
- */
+// CSV出力ボタンクリック時の処理
 async function handleExportCsv() {
   if (searchResults.length === 0) {
     showAlert('エクスポートする結果がありません。');
     return;
   }
   
+  showLoadingModal('CSVファイルを生成しています...');
+  
   try {
-    showLoadingModal();
-    
     const response = await fetch('/api/export-csv', {
       method: 'POST',
       headers: {
@@ -355,243 +325,248 @@ async function handleExportCsv() {
     });
     
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'CSVエクスポート中にエラーが発生しました。');
+      throw new Error(`サーバーエラー: ${response.status}`);
     }
     
-    // CSVデータを取得
+    // レスポンスのテキストを取得
     const csvData = await response.text();
     
     // CSVファイルとしてダウンロード
-    downloadCsv(csvData, 'company_info.csv');
+    const filename = `company_info_${new Date().toISOString().slice(0, 10)}.csv`;
+    downloadCsv(csvData, filename);
+    
+    hideLoadingModal();
+    showAlert('CSVファイルがダウンロードされました。');
     
   } catch (error) {
-    showAlert(`エラー: ${error.message}`);
-    console.error('CSV export error:', error);
-  } finally {
     hideLoadingModal();
+    console.error('CSVエクスポートエラー:', error);
+    showAlert(`CSVエクスポート中にエラーが発生しました: ${error.message}`);
   }
 }
 
-/**
- * テーブルコピーボタンクリック時の処理
- */
+// テーブルをコピーボタンクリック時の処理
 function handleCopyTable() {
   if (searchResults.length === 0) {
     showAlert('コピーする結果がありません。');
     return;
   }
   
-  // テーブルをクリップボードにコピー
-  const tableHeaders = [
-    '会社名', '郵便番号', '都道府県', '市区町村', '残りの住所', '代表者の役職名', '代表者名'
-  ];
-  
-  let tableText = tableHeaders.join('\t') + '\n';
+  // テーブルの内容をテキストとして構築
+  let tableText = '会社名\t所在地\t代表者\t電話番号\t設立年\n';
   
   searchResults.forEach(result => {
-    const row = [
-      result.companyName || '',
-      result.postalCode || '',
-      result.prefecture || '',
-      result.city || '',
-      result.address || '',
-      result.representativeTitle || '',
-      result.representativeName || ''
-    ];
-    tableText += row.join('\t') + '\n';
+    if (!result.errorOccurred) {
+      tableText += `${result.companyName || ''}\t`;
+      tableText += `${result.address || ''}\t`;
+      tableText += `${result.representative || ''}\t`;
+      tableText += `${result.phoneNumber || ''}\t`;
+      tableText += `${result.foundingYear || ''}\n`;
+    }
   });
   
+  // クリップボードにコピー
   copyToClipboard(tableText);
-  showAlert('テーブルがクリップボードにコピーされました。');
+  
+  showAlert('検索結果がクリップボードにコピーされました。');
 }
 
-/**
- * 検索結果の表示
- * @param {Array} results - 検索結果の配列
- */
+// 検索結果を表示
 function displayResults(results) {
-  if (results.length === 0) {
-    resultsSection.style.display = 'none';
-    return;
-  }
-  
-  // テーブルの内容をクリア
   resultsTbody.innerHTML = '';
   
-  // 各結果を表示
-  results.forEach(result => {
-    // エラーがあるデータはスキップ
-    if (result.errorOccurred || result.error) {
-      return;
-    }
-    
-    const tr = document.createElement('tr');
-    
-    // 各セルの追加
-    const cells = [
-      result.companyName || '',
-      result.postalCode || '',
-      result.prefecture || '',
-      result.city || '',
-      result.address || '',
-      result.representativeTitle || '',
-      result.representativeName || ''
-    ];
-    
-    cells.forEach(cellText => {
-      const td = document.createElement('td');
-      td.textContent = cellText;
-      tr.appendChild(td);
-    });
-    
-    resultsTbody.appendChild(tr);
-  });
-  
-  // 結果が1つ以上あるか確認
-  if (resultsTbody.children.length === 0) {
-    showAlert('表示できる結果がありません。');
-    resultsSection.style.display = 'none';
+  if (results.length === 0) {
     return;
   }
+  
+  // 成功した検索結果を先に表示
+  const successResults = results.filter(result => !result.errorOccurred);
+  const errorResults = results.filter(result => result.errorOccurred);
+  
+  // 成功結果を表示
+  successResults.forEach(result => {
+    const row = document.createElement('tr');
+    
+    row.innerHTML = `
+      <td class="company-name">${escapeHtml(result.companyName || '')}</td>
+      <td class="address">${escapeHtml(result.address || '')}</td>
+      <td class="representative">${escapeHtml(result.representative || '')}</td>
+      <td class="phone-number">${escapeHtml(result.phoneNumber || '')}</td>
+      <td class="founding-year">${escapeHtml(result.foundingYear || '')}</td>
+    `;
+    
+    resultsTbody.appendChild(row);
+  });
+  
+  // エラー結果を表示（あれば）
+  errorResults.forEach(result => {
+    const row = document.createElement('tr');
+    row.className = 'error-row';
+    
+    row.innerHTML = `
+      <td class="company-name">${escapeHtml(result.companyName || '')}</td>
+      <td colspan="4" class="error-message">エラー: ${escapeHtml(result.errorMessage || '不明なエラー')}</td>
+    `;
+    
+    resultsTbody.appendChild(row);
+  });
   
   // 結果セクションを表示
   resultsSection.style.display = 'block';
-  
-  // アニメーション効果
-  resultsSection.classList.add('fade-in');
-  setTimeout(() => {
-    resultsSection.classList.remove('fade-in');
-  }, 500);
+  exportCsvButton.style.display = 'inline-block';
+  copyTableButton.style.display = 'inline-block';
 }
 
-/**
- * 検索プロセスの表示を更新
- * @param {string} companyName - 会社名
- * @param {string} step - 検索ステップの説明
- * @param {number|string} stepNumber - ステップ番号またはエラー
- */
+// HTML特殊文字をエスケープ
+function escapeHtml(str) {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// 処理状況の表示を更新
 function updateProcessDisplay(companyName, step, stepNumber) {
-  // 会社ごとのプロセスアイテムを取得または作成
-  let processItem = document.querySelector(`.process-item[data-company="${companyName}"]`);
+  // すでに会社の処理状況要素があるかチェック
+  let companyElement = document.getElementById(`process-${companyName}`);
   
-  if (!processItem) {
-    processItem = document.createElement('div');
-    processItem.className = 'process-item';
-    processItem.setAttribute('data-company', companyName);
+  if (!companyElement) {
+    // 新しい会社の処理状況要素を作成
+    companyElement = document.createElement('div');
+    companyElement.id = `process-${companyName}`;
+    companyElement.className = 'process-item';
     
-    const companyHeader = document.createElement('div');
-    companyHeader.className = 'process-company';
-    companyHeader.textContent = companyName;
-    processItem.appendChild(companyHeader);
+    const companyNameElement = document.createElement('div');
+    companyNameElement.className = 'company-name';
+    companyNameElement.textContent = companyName;
     
-    processContainer.appendChild(processItem);
+    const stepElement = document.createElement('div');
+    stepElement.className = 'step-info';
+    
+    const progressElement = document.createElement('div');
+    progressElement.className = 'progress-bar';
+    
+    companyElement.appendChild(companyNameElement);
+    companyElement.appendChild(stepElement);
+    companyElement.appendChild(progressElement);
+    
+    processContainer.appendChild(companyElement);
   }
   
-  // ステップを追加
-  const processStep = document.createElement('div');
-  processStep.className = 'process-step';
+  // 進捗状況を更新
+  const stepElement = companyElement.querySelector('.step-info');
+  stepElement.textContent = step;
   
-  const stepIcon = document.createElement('div');
-  stepIcon.className = 'process-step-icon';
-  
-  // エラーの場合は特別なスタイルを適用
+  // エラーの場合
   if (stepNumber === 'error') {
-    stepIcon.classList.add('error');
-    stepIcon.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';
-  } else {
-    stepIcon.textContent = stepNumber;
+    companyElement.classList.add('error');
+    return;
   }
   
-  const stepText = document.createElement('div');
-  stepText.className = 'process-step-text';
-  if (stepNumber === 'error') {
-    stepText.classList.add('error');
+  // 進捗バーを更新
+  const progressElement = companyElement.querySelector('.progress-bar');
+  
+  if (typeof stepNumber === 'number') {
+    const progressPercent = Math.min(Math.floor((stepNumber / 5) * 100), 100);
+    progressElement.style.width = `${progressPercent}%`;
+    
+    if (progressPercent === 100) {
+      companyElement.classList.add('completed');
+    }
   }
-  stepText.textContent = step;
-  
-  processStep.appendChild(stepIcon);
-  processStep.appendChild(stepText);
-  processItem.appendChild(processStep);
-  
-  // スクロールを最下部に移動
-  processContainer.scrollTop = processContainer.scrollHeight;
 }
 
-/**
- * 進捗表示の更新
- */
+// 全体の進捗を更新
 function updateProgress() {
-  progressText.textContent = `${processedCount} / ${totalCount} 完了`;
+  if (totalCount > 0) {
+    const progressPercent = Math.floor((processedCount / totalCount) * 100);
+    progressText.textContent = `進捗状況: ${processedCount}/${totalCount} (${progressPercent}%)`;
+  }
 }
 
-/**
- * 結果をクリア
- */
+// 結果をクリア
 function clearResults() {
-  resultsTbody.innerHTML = '';
-  processContainer.innerHTML = '';
   searchResults = [];
+  processedCount = 0;
+  totalCount = 0;
+  
+  resultsTbody.innerHTML = '';
+  resultsSection.style.display = 'none';
+  exportCsvButton.style.display = 'none';
+  copyTableButton.style.display = 'none';
 }
 
-/**
- * アラートを表示
- * @param {string} message - 表示するメッセージ
- */
+// アラートメッセージを表示
 function showAlert(message) {
   alert(message);
 }
 
-/**
- * ローディングモーダルを表示
- */
-function showLoadingModal() {
-  loadingModal.classList.add('active');
+// ローディングモーダルを表示
+function showLoadingModal(message = '処理中...') {
+  loadingModal.style.display = 'flex';
+  document.getElementById('loading-message').textContent = message;
 }
 
-/**
- * ローディングモーダルを非表示
- */
+// ローディングモーダルを非表示
 function hideLoadingModal() {
-  loadingModal.classList.remove('active');
+  loadingModal.style.display = 'none';
 }
 
 /**
- * テキストをクリップボードにコピー
- * @param {string} text - コピーするテキスト
+ * クリップボードにテキストをコピー
  */
 function copyToClipboard(text) {
   // 一時的なテキストエリアを作成
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', '');
-  textarea.style.position = 'absolute';
-  textarea.style.left = '-9999px';
-  document.body.appendChild(textarea);
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-999999px';
+  textArea.style.top = '-999999px';
+  document.body.appendChild(textArea);
   
   // テキストを選択してコピー
-  textarea.select();
-  document.execCommand('copy');
+  textArea.focus();
+  textArea.select();
+  
+  try {
+    // コピーコマンドを実行
+    document.execCommand('copy');
+  } catch (err) {
+    console.error('クリップボードへのコピーに失敗しました', err);
+  }
   
   // テキストエリアを削除
-  document.body.removeChild(textarea);
+  document.body.removeChild(textArea);
 }
 
 /**
  * CSVファイルをダウンロード
- * @param {string} csv - CSVデータ
- * @param {string} filename - ファイル名
  */
 function downloadCsv(csv, filename) {
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
+  // BOMを追加してExcelで文字化けしないようにする
+  const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+  const blob = new Blob([bom, csv], { type: 'text/csv;charset=utf-8' });
   
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', filename);
-  link.style.visibility = 'hidden';
-  
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  if (navigator.msSaveBlob) {
+    // IEとEdgeの場合
+    navigator.msSaveBlob(blob, filename);
+  } else {
+    // その他のブラウザの場合
+    const link = document.createElement('a');
+    
+    if (link.download !== undefined) {
+      // ダウンロード属性がサポートされている場合
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', filename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+  }
 } 

@@ -11,8 +11,8 @@ const { convertToCSV } = require('./csvService');
 dotenv.config();
 
 const app = express();
-// ポート番号を3001に固定（環境変数を無視）
-const PORT = 3001;
+// Renderではポート番号を環境変数から取得
+const PORT = process.env.PORT || 3001;
 
 // HTTPサーバーを作成
 const server = http.createServer(app);
