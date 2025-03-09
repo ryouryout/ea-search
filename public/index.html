@@ -3,64 +3,54 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EA Search - 企業情報検索エージェント</title>
+  <title>EAサーチ</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
 </head>
 <body>
   <div class="app-container">
     <header>
-      <div class="logo-container">
-        <h1><span class="logo-text">EA</span> <span class="logo-subtitle">search</span></h1>
-      </div>
-      <h2 class="tagline">企業情報を素早く正確に検索</h2>
+      <h1>EAサーチ - 企業情報検索</h1>
     </header>
-
+    
     <main>
-      <section class="search-section">
-        <div class="search-container">
-          <h3>会社名を入力してください</h3>
-          <p class="description">一度に最大500社まで検索できます。1行に1社ずつ入力してください。</p>
-          
-          <div class="input-group">
-            <textarea id="company-input" placeholder="例：
-株式会社サンプル
-スマートテクノロジー株式会社
-有限会社未来工房"></textarea>
-          </div>
-
-          <div class="button-container">
-            <button id="search-button" class="primary-button">
-              <i class="fas fa-search"></i> 検索開始
-            </button>
-            <button id="clear-button" class="secondary-button">
-              <i class="fas fa-times"></i> クリア
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section class="process-section" id="process-section" style="display: none;">
-        <h3>検索プロセス</h3>
-        <div class="process-container" id="process-container">
-          <!-- 検索過程がここに表示されます -->
-        </div>
-      </section>
-
-      <section class="results-section" id="results-section" style="display: none;">
-        <div class="results-header">
-          <h3>検索結果</h3>
-          <div class="results-actions">
-            <button id="export-csv-button" class="action-button">
-              <i class="fas fa-file-csv"></i> CSVをエクスポート
-            </button>
-            <button id="copy-table-button" class="action-button">
-              <i class="fas fa-copy"></i> テーブルをコピー
-            </button>
-          </div>
-        </div>
+      <section id="search-section">
+        <h2>企業検索</h2>
+        <p>検索したい会社名を入力してください（複数の場合は改行で区切ってください）</p>
         
+        <form id="search-form">
+          <div class="form-group">
+            <textarea id="company-input" rows="5" placeholder="例：
+株式会社テクノフューチャー
+グローバルイノベーション株式会社
+未来創造産業"></textarea>
+          </div>
+          <div class="buttons">
+            <button type="submit" id="search-button" class="primary-button">
+              <i class="fas fa-search"></i> 検索
+            </button>
+            <button type="button" id="clear-button" class="secondary-button">
+              <i class="fas fa-trash"></i> クリア
+            </button>
+          </div>
+        </form>
+      </section>
+      
+      <section id="process-section">
+        <h2>検索進捗状況 <span id="progress-text">0 / 0 完了</span></h2>
+        <div id="process-container"></div>
+      </section>
+      
+      <section id="results-section">
+        <h2>検索結果</h2>
+        <div class="export-buttons">
+          <button id="export-csv-button" class="secondary-button">
+            <i class="fas fa-file-csv"></i> CSVエクスポート
+          </button>
+          <button id="copy-table-button" class="secondary-button">
+            <i class="fas fa-copy"></i> テーブルをコピー
+          </button>
+        </div>
         <div class="table-container">
           <table id="results-table">
             <thead>
@@ -70,32 +60,34 @@
                 <th>都道府県</th>
                 <th>市区町村</th>
                 <th>残りの住所</th>
-                <th>代表者の役職名</th>
+                <th>代表者役職</th>
                 <th>代表者名</th>
               </tr>
             </thead>
-            <tbody id="results-tbody">
-              <!-- 結果がここに表示されます -->
-            </tbody>
+            <tbody id="results-tbody"></tbody>
           </table>
         </div>
       </section>
     </main>
-
+    
     <footer>
-      <p>&copy; 2024 EA Search - 会社情報検索エージェント</p>
+      <p>&copy; 2023 EAサーチ - WebSocket + Google Search + Claude を使用した企業情報検索</p>
     </footer>
-  </div>
+    
+    <div id="loading-modal" class="modal">
+      <div class="modal-content">
+        <div class="loader"></div>
+        <p id="loading-message">検索中です...</p>
+      </div>
+    </div>
 
-  <!-- モーダル -->
-  <div id="loading-modal" class="modal">
-    <div class="modal-content">
-      <div class="spinner"></div>
-      <p>検索中です。しばらくお待ちください...</p>
-      <p id="progress-text">0 / 0 完了</p>
+    <div id="connection-debug" style="display:none">
+      <h3>接続デバッグ</h3>
+      <button id="debug-send-test" class="secondary-button">テストメッセージ送信</button>
+      <div id="connection-status-debug" style="height: 100px; overflow-y: auto; border: 1px solid #ccc; padding: 5px; margin-top: 10px; font-size: 12px;"></div>
     </div>
   </div>
-
+  
   <script src="app.js"></script>
 </body>
 </html> 

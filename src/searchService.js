@@ -4,109 +4,108 @@ const dotenv = require('dotenv');
 // Load environment variables
 dotenv.config();
 
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
 const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID;
-const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
+const CLAUDE_API_KEY = process.env.ANTHROPIC_API_KEY;
+
+// 環境変数のログ出力（機密情報を隠して）
+console.log('環境変数の確認:');
+console.log('- GOOGLE_SEARCH_API_KEY:', GOOGLE_API_KEY ? `設定済み (${GOOGLE_API_KEY.substring(0, 5)}...)` : '未設定');
+console.log('- GOOGLE_SEARCH_ENGINE_ID:', GOOGLE_SEARCH_ENGINE_ID || '未設定');
+console.log('- ANTHROPIC_API_KEY:', CLAUDE_API_KEY ? `設定済み (${CLAUDE_API_KEY.substring(0, 5)}...)` : '未設定');
 
 /**
- * 複数の会社情報を検索する
- * @param {string[]} companies - 検索する会社名の配列
- * @returns {Promise<Array>} - 会社情報の配列
+ * 会社情報を検索する
+ * @param {string} companyName - 検索する会社名
+ * @param {function} progressCallback - 進捗通知用コールバック関数（オプション）
+ * @returns {Promise<Object>} - 会社情報オブジェクト
  */
-async function searchCompanyInfo(companies) {
-  const results = [];
-  
-  // 各会社を順番に処理
-  for (const companyName of companies) {
-    try {
-      console.log(`Searching for company: ${companyName}`);
-      
-      // 会社情報を検索
-      const companyInfo = await getCompanyInfo(companyName);
-      
-      // 結果を追加
-      results.push({
-        companyName,
-        ...companyInfo
-      });
-      
-      // 検索完了を通知
-      if (global.notifySearchComplete) {
-        global.notifySearchComplete(companyName, true);
-      }
-      
-      // APIレートリミットを考慮して少し待機
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-    } catch (error) {
-      console.error(`Error searching for ${companyName}:`, error);
-      // エラーを記録し、エラー情報を含めて結果に追加
-      results.push({
-        companyName,
-        error: error.message || 'Unknown error occurred',
-        errorOccurred: true
-      });
-      
-      // エラーを通知
-      if (global.notifySearchComplete) {
-        global.notifySearchComplete(companyName, false, error.message);
-      }
+async function searchCompanyInfo(companyName, progressCallback) {
+  try {
+    console.log(`Searching for company: ${companyName}`);
+    
+    // 進捗を通知
+    if (progressCallback) {
+      progressCallback('基本情報を検索中...', 1);
+    } else {
+      console.log(`Search progress: ${companyName} - 基本情報を検索中... (1)`);
     }
+    
+    // 会社情報を検索
+    const companyInfo = await getCompanyInfo(companyName, progressCallback);
+    
+    return companyInfo;
+  } catch (error) {
+    console.error(`Error searching for ${companyName}:`, error);
+    throw error;
   }
-  
-  return results;
 }
 
 /**
- * 単一の会社情報を取得する
+ * Google検索とClaudeを使用して会社情報を取得
  * @param {string} companyName - 検索する会社名
- * @returns {Promise<Object>} - 会社情報のオブジェクト
+ * @param {function} progressCallback - 進捗通知用コールバック関数（オプション）
+ * @returns {Promise<Object>} - 会社情報オブジェクト
  */
-async function getCompanyInfo(companyName) {
-  // APIキーが設定されているか確認
-  if (!GOOGLE_API_KEY || !GOOGLE_SEARCH_ENGINE_ID || !CLAUDE_API_KEY) {
-    throw new Error('APIキーが設定されていません。環境変数を確認してください。');
+async function getCompanyInfo(companyName, progressCallback) {
+  // 基本情報を検索
+  const searchQuery = `${companyName} 会社概要 本社 住所 代表`;
+  
+  // GoogleカスタムAPI検索を実行
+  const searchResults = await googleSearch(searchQuery);
+  
+  // 進捗を通知
+  if (progressCallback) {
+    progressCallback('情報を抽出中...', 2);
+  } else {
+    console.log(`Search progress: ${companyName} - 情報を抽出中... (2)`);
   }
-
-  // プロセス通知ヘルパー関数
-  const notifyStep = (step, stepNumber) => {
-    if (global.notifySearchProgress) {
-      global.notifySearchProgress(companyName, step, stepNumber);
-    }
-  };
-
-  try {
-    // ステップ1: 最初の検索実行
-    notifyStep('基本情報を検索中...', 1);
-    const searchTerm = `${companyName} 会社概要 本社 住所 代表`;
-    const searchResults = await searchWithGoogle(searchTerm);
-    
-    if (!searchResults || searchResults.length === 0) {
-      throw new Error('検索結果が見つかりませんでした。');
-    }
-    
-    // ステップ2: Claudeを使って検索結果から情報を抽出
-    notifyStep('情報を抽出中...', 2);
-    const firstExtraction = await extractInfoWithClaude(companyName, searchResults);
-    
-    // ステップ3: ファクトチェック用に追加の検索を実行
-    notifyStep('追加情報を検索中...', 3);
-    const additionalSearchQuery = generateAdditionalSearchQuery(companyName, firstExtraction);
-    const factCheckResults = await searchWithGoogle(additionalSearchQuery);
-    
-    // ステップ4: Claudeに再度、抽出と検証を依頼
-    notifyStep('情報を検証中...', 4);
-    const verifiedInfo = await verifyInfoWithClaude(companyName, firstExtraction, factCheckResults);
-    
-    // ステップ5: 検索完了
-    notifyStep('検索完了', 5);
-    
-    return verifiedInfo;
-  } catch (error) {
-    // エラーが発生した場合はエラーステップを通知
-    notifyStep(`エラー: ${error.message}`, 'error');
-    throw error;
+  
+  // ClaudeAPIを使って情報を抽出
+  const extractedInfo = await extractInfoWithClaude(companyName, searchResults);
+  
+  // 追加情報の検索
+  let additionalSearchQuery = null;
+  
+  if (extractedInfo.postalCode) {
+    additionalSearchQuery = `${companyName} 郵便番号 ${extractedInfo.postalCode}`;
+  } else if (extractedInfo.prefecture && extractedInfo.city) {
+    additionalSearchQuery = `${companyName} ${extractedInfo.prefecture} ${extractedInfo.city} 本社所在地`;
+  } else {
+    additionalSearchQuery = `${companyName} 代表取締役`;
   }
+  
+  // 進捗を通知
+  if (progressCallback) {
+    progressCallback('追加情報を検索中...', 3);
+  } else {
+    console.log(`Search progress: ${companyName} - 追加情報を検索中... (3)`);
+  }
+  
+  // 生成したクエリをログに出力
+  console.log(`生成された追加検索クエリ: "${additionalSearchQuery}"`);
+  
+  // 追加検索を実行
+  const additionalSearchResults = await googleSearch(additionalSearchQuery);
+  
+  // 進捗を通知
+  if (progressCallback) {
+    progressCallback('情報を検証中...', 4);
+  } else {
+    console.log(`Search progress: ${companyName} - 情報を検証中... (4)`);
+  }
+  
+  // Claudeで情報の検証と充実化
+  const validatedInfo = await validateInfoWithClaude(companyName, additionalSearchResults, extractedInfo);
+  
+  // 進捗を通知
+  if (progressCallback) {
+    progressCallback('検索完了', 5);
+  } else {
+    console.log(`Search progress: ${companyName} - 検索完了 (5)`);
+  }
+  
+  return validatedInfo;
 }
 
 /**
@@ -114,7 +113,7 @@ async function getCompanyInfo(companyName) {
  * @param {string} query - 検索クエリ
  * @returns {Promise<Array>} - 検索結果の配列
  */
-async function searchWithGoogle(query) {
+async function googleSearch(query) {
   try {
     console.log(`Googleで検索: "${query}"`);
     
@@ -143,47 +142,6 @@ async function searchWithGoogle(query) {
     console.error('Google Search API error:', error.message);
     throw new Error(`Google検索でエラーが発生しました: ${error.message}`);
   }
-}
-
-/**
- * ファクトチェック用の追加検索クエリを生成
- * @param {string} companyName - 会社名
- * @param {Object} firstInfo - 最初に抽出した情報
- * @returns {string} - 追加検索クエリ
- */
-function generateAdditionalSearchQuery(companyName, firstInfo) {
-  const { postalCode, prefecture, city, representativeName } = firstInfo;
-  
-  // より具体的な検索クエリを作成
-  let queries = [];
-  
-  // 基本クエリ
-  queries.push(`${companyName} 企業情報`);
-  
-  // 住所に関する情報があれば追加
-  if (prefecture || city) {
-    queries.push(`${companyName} ${prefecture || ''} ${city || ''} 本社所在地`);
-  } else {
-    queries.push(`${companyName} 本社所在地`);
-  }
-  
-  // 代表者に関する情報があれば追加
-  if (representativeName) {
-    queries.push(`${companyName} ${representativeName} 代表取締役`);
-  } else {
-    queries.push(`${companyName} 代表取締役`);
-  }
-  
-  // 郵便番号に関する情報があれば追加
-  if (postalCode) {
-    queries.push(`${companyName} 郵便番号 ${postalCode}`);
-  }
-  
-  // 最も詳細なクエリを選択
-  const finalQuery = queries.reduce((a, b) => a.length > b.length ? a : b);
-  
-  console.log(`生成された追加検索クエリ: "${finalQuery}"`);
-  return finalQuery;
 }
 
 /**
@@ -335,7 +293,7 @@ ${formattedResults}
  * @param {Array} factCheckResults - ファクトチェック用の検索結果
  * @returns {Promise<Object>} - 検証された会社情報
  */
-async function verifyInfoWithClaude(companyName, firstInfo, factCheckResults) {
+async function validateInfoWithClaude(companyName, factCheckResults, firstInfo) {
   console.log(`Claude APIで情報検証: "${companyName}"`);
   
   const CLAUDE_API_KEY = process.env.ANTHROPIC_API_KEY;
