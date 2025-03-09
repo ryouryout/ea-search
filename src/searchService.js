@@ -1,6 +1,5 @@
 const axios = require('axios');
 const dotenv = require('dotenv');
-const https = require('https');
 
 // Load environment variables
 dotenv.config();
@@ -9,54 +8,11 @@ const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
 const GOOGLE_SEARCH_ENGINE_ID = process.env.GOOGLE_SEARCH_ENGINE_ID;
 const CLAUDE_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-// Railway環境かどうかを検出
-const IS_RAILWAY = process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_STATIC_URL;
-
-// Railway環境でのaxios設定カスタマイズ
-if (IS_RAILWAY) {
-  console.log('Railway環境用のaxios設定を適用します');
-  
-  // デフォルトのHTTPSエージェント設定
-  const httpsAgent = new https.Agent({
-    keepAlive: true,
-    timeout: 60000, // 60秒
-    rejectUnauthorized: true // SSL証明書の検証を有効に
-  });
-  
-  // axiosのデフォルト設定
-  axios.defaults.timeout = 30000; // 30秒
-  axios.defaults.httpsAgent = httpsAgent;
-  axios.defaults.maxRedirects = 5;
-  axios.defaults.maxContentLength = 50 * 1024 * 1024; // 50MB
-  
-  // リクエストインターセプター
-  axios.interceptors.request.use(config => {
-    console.log(`API呼び出し: ${config.url}`);
-    return config;
-  }, error => {
-    console.error('リクエスト設定エラー:', error.message);
-    return Promise.reject(error);
-  });
-  
-  // レスポンスインターセプター
-  axios.interceptors.response.use(response => {
-    console.log(`ステータスコード: ${response.status} (${response.config.url})`);
-    return response;
-  }, error => {
-    console.error(`API呼び出しエラー: ${error.message}`);
-    return Promise.reject(error);
-  });
-}
-
 // 環境変数のログ出力（機密情報を隠して）
 console.log('環境変数の確認:');
 console.log('- GOOGLE_SEARCH_API_KEY:', GOOGLE_API_KEY ? `設定済み (${GOOGLE_API_KEY.substring(0, 5)}...)` : '未設定');
 console.log('- GOOGLE_SEARCH_ENGINE_ID:', GOOGLE_SEARCH_ENGINE_ID || '未設定');
 console.log('- ANTHROPIC_API_KEY:', CLAUDE_API_KEY ? `設定済み (${CLAUDE_API_KEY.substring(0, 5)}...)` : '未設定');
-
-// Railway環境であるかの確認（デバッグ用）
-console.log('- 実行環境:', IS_RAILWAY ? 'Railway' : 'ローカル');
-console.log('- NODE_ENV:', process.env.NODE_ENV || '未設定');
 
 /**
  * 会社情報を検索する
@@ -86,121 +42,67 @@ async function searchCompanyInfo(companyName, progressCallback) {
 }
 
 /**
- * Google検索とClaudeを使用して会社情報を取得
- * @param {string} companyName - 検索する会社名
+ * 会社情報を取得
+ * @param {string} companyName - 会社名
  * @param {function} progressCallback - 進捗通知用コールバック関数（オプション）
  * @returns {Promise<Object>} - 会社情報オブジェクト
  */
 async function getCompanyInfo(companyName, progressCallback) {
-  // 基本情報を検索
-  const searchQuery = `${companyName} 会社概要 本社 住所 代表`;
-  
-  // GoogleカスタムAPI検索を実行
-  const searchResults = await googleSearch(searchQuery);
-  
-  // 進捗を通知
-  if (progressCallback) {
-    progressCallback('情報を抽出中...', 2);
-  } else {
-    console.log(`Search progress: ${companyName} - 情報を抽出中... (2)`);
-  }
-  
-  // ClaudeAPIを使って情報を抽出
-  const extractedInfo = await extractInfoWithClaude(companyName, searchResults);
-  
-  // 追加情報の検索
-  let additionalSearchQuery = null;
-  
-  if (extractedInfo.postalCode) {
-    additionalSearchQuery = `${companyName} 郵便番号 ${extractedInfo.postalCode}`;
-  } else if (extractedInfo.prefecture && extractedInfo.city) {
-    additionalSearchQuery = `${companyName} ${extractedInfo.prefecture} ${extractedInfo.city} 本社所在地`;
-  } else {
-    additionalSearchQuery = `${companyName} 代表取締役`;
-  }
-  
-  // 進捗を通知
-  if (progressCallback) {
-    progressCallback('追加情報を検索中...', 3);
-  } else {
-    console.log(`Search progress: ${companyName} - 追加情報を検索中... (3)`);
-  }
-  
-  // 生成したクエリをログに出力
-  console.log(`生成された追加検索クエリ: "${additionalSearchQuery}"`);
-  
-  // 追加検索を実行
-  const additionalSearchResults = await googleSearch(additionalSearchQuery);
-  
-  // 進捗を通知
-  if (progressCallback) {
-    progressCallback('情報を検証中...', 4);
-  } else {
-    console.log(`Search progress: ${companyName} - 情報を検証中... (4)`);
-  }
-  
-  // Claudeで情報の検証と充実化
-  const validatedInfo = await validateInfoWithClaude(companyName, additionalSearchResults, extractedInfo);
-  
-  // 進捗を通知
-  if (progressCallback) {
-    progressCallback('検索完了', 5);
-  } else {
-    console.log(`Search progress: ${companyName} - 検索完了 (5)`);
-  }
-  
-  return validatedInfo;
-}
-
-/**
- * Railway環境向けのフォールバック検索機能
- * Google検索が失敗した場合に使用されるバックアップメカニズム
- */
-async function railwayFallbackSearch(query) {
-  console.log(`Railway向けフォールバック検索実行: "${query}"`);
-  
   try {
-    // クエリを簡素化して再試行
-    const simplifiedQuery = query.replace(/[^\w\s]/gi, '').trim().substring(0, 100);
-    console.log(`簡素化クエリ: "${simplifiedQuery}"`);
+    // 検索クエリを作成
+    const searchQuery = `${companyName} 会社概要 本社 住所 代表`;
     
-    // バックアップエンドポイントの設定
-    const requestConfig = {
-      params: {
-        key: GOOGLE_API_KEY,
-        cx: GOOGLE_SEARCH_ENGINE_ID,
-        q: simplifiedQuery,
-        num: 5, // 返却件数を減らす
-        safe: 'active',
-        fields: 'items(title,link,snippet)' // 返却フィールドを限定
-      },
-      timeout: 15000
-    };
+    // Google検索を実行
+    const searchResults = await googleSearch(searchQuery);
     
-    const response = await axios.get('https://www.googleapis.com/customsearch/v1', requestConfig);
-    
-    if (response.data && response.data.items && response.data.items.length > 0) {
-      console.log(`フォールバック検索成功: ${response.data.items.length}件`);
-      return response.data.items.map(item => ({
-        title: item.title,
-        link: item.link,
-        snippet: item.snippet
-      }));
+    // 進捗を通知
+    if (progressCallback) {
+      progressCallback('情報を抽出中...', 2);
+    } else {
+      console.log(`Search progress: ${companyName} - 情報を抽出中... (2)`);
     }
     
-    throw new Error('フォールバック検索でも結果が得られませんでした');
-  } catch (error) {
-    console.error('フォールバック検索エラー:', error.message);
+    // Claude APIで情報を抽出
+    const extractedInfo = await extractInfoWithClaude(companyName, searchResults);
     
-    // 最後の手段: 空の検索結果配列を返す
-    console.log('最終フォールバック: プレースホルダー検索結果を返します');
-    return [
-      {
-        title: `${query} - 企業情報`,
-        link: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
-        snippet: `${query}に関する情報。検索サービスの一時的な問題により詳細情報を取得できませんでした。`
-      }
-    ];
+    // 追加情報を検索するためのクエリを生成
+    const additionalQuery = `${companyName} 郵便番号 ${extractedInfo.postalCode}`;
+    
+    // 進捗を通知
+    if (progressCallback) {
+      progressCallback('追加情報を検索中...', 3);
+    } else {
+      console.log(`Search progress: ${companyName} - 追加情報を検索中... (3)`);
+    }
+    
+    console.log(`生成された追加検索クエリ: "${additionalQuery}"`);
+    
+    // 追加情報を検索
+    const additionalResults = await googleSearch(additionalQuery);
+    
+    // 進捗を通知
+    if (progressCallback) {
+      progressCallback('情報を検証中...', 4);
+    } else {
+      console.log(`Search progress: ${companyName} - 情報を検証中... (4)`);
+    }
+    
+    // Claude APIで情報を検証
+    const validatedInfo = await validateInfoWithClaude(companyName, additionalResults, extractedInfo);
+    
+    // 進捗を通知
+    if (progressCallback) {
+      progressCallback('検索完了', 5);
+    } else {
+      console.log(`Search progress: ${companyName} - 検索完了 (5)`);
+    }
+    
+    return {
+      companyName,
+      ...validatedInfo
+    };
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -212,29 +114,15 @@ async function railwayFallbackSearch(query) {
 async function googleSearch(query) {
   try {
     console.log(`Googleで検索: "${query}"`);
-
-    // Railway環境の場合、クエリのエンコーディングとリクエスト設定を調整
-    const searchQuery = IS_RAILWAY ? encodeURIComponent(query) : query;
     
-    // デバッグ: Railway環境ではリクエスト詳細をログ出力
-    if (IS_RAILWAY) {
-      console.log(`Railway環境検出: 検索クエリをエンコード "${query}" -> "${searchQuery}"`);
-      console.log(`API設定: key=${GOOGLE_API_KEY ? GOOGLE_API_KEY.substring(0, 5) + '...' : '未設定'}, cx=${GOOGLE_SEARCH_ENGINE_ID || '未設定'}`);
-    }
-    
-    // リクエスト設定オブジェクト
-    const requestConfig = {
+    const response = await axios.get('https://www.googleapis.com/customsearch/v1', {
       params: {
         key: GOOGLE_API_KEY,
         cx: GOOGLE_SEARCH_ENGINE_ID,
-        q: IS_RAILWAY ? searchQuery : query,
+        q: query,
         num: 10
-      },
-      // Railway環境ではタイムアウトを長めに設定
-      timeout: IS_RAILWAY ? 10000 : 5000
-    };
-    
-    const response = await axios.get('https://www.googleapis.com/customsearch/v1', requestConfig);
+      }
+    });
     
     if (response.data && response.data.items) {
       console.log(`検索結果: ${response.data.items.length}件`);
@@ -255,23 +143,16 @@ async function googleSearch(query) {
       // サーバーからのレスポンスがある場合
       console.error('API Response Error:', {
         status: error.response.status,
-        data: JSON.stringify(error.response.data).substring(0, 500), // レスポンスデータを短く切り詰めて表示
-        headers: JSON.stringify(error.response.headers)
+        data: error.response.data,
+        headers: error.response.headers
       });
     } else if (error.request) {
       // リクエストは送信されたがレスポンスがない場合
-      console.error('API Request Error:', typeof error.request === 'object' ? 'リクエストオブジェクト(詳細省略)' : error.request);
+      console.error('API Request Error:', error.request);
     } else {
       // リクエスト設定時にエラーが発生した場合
-      console.error('API Error Config:', error.config ? JSON.stringify(error.config) : '設定なし');
+      console.error('API Error Config:', error.config);
     }
-    
-    // Railway環境での致命的なエラーの場合、バックアップロジックを使用
-    if (IS_RAILWAY && (error.response?.status === 400 || error.response?.status === 403)) {
-      console.log('Railway環境でのAPI障害を検出: フォールバック検索を使用します');
-      return await railwayFallbackSearch(query);
-    }
-    
     throw new Error(`Google検索でエラーが発生しました: ${error.message}`);
   }
 }
