@@ -164,7 +164,7 @@ app.post('/api/export-csv', async (req, res) => {
 });
 
 // Start the server
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
-  console.log(`Access the application at http://localhost:${PORT}`);
+  // localhost URLはプロダクション環境では不要なので削除
 }); 
